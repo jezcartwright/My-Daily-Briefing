@@ -165,7 +165,20 @@ html.login-active{background:var(--orange)}
 .search-bar{padding:10px 12px;border-bottom:1px solid var(--b);flex-shrink:0;display:flex;gap:8px;background:var(--white)}
 .search-input{flex:1;border:1px solid var(--b);border-radius:6px;padding:8px 10px;font-family:'Playfair Display',serif;font-size:13px;color:var(--t);outline:none;background:var(--bg)}
 .search-clear{background:none;border:none;color:var(--t3);font-size:18px;cursor:pointer;padding:0 4px}
-.filter-tabs{display:flex;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:8px 12px;gap:6px;flex-shrink:0}
+.filter-row{display:flex;align-items:center;gap:8px;padding:8px 12px;overflow:visible;flex-shrink:0}
+.filter-tabs{display:flex;overflow-x:auto;-webkit-overflow-scrolling:touch;gap:6px;flex:1;min-width:0}
+.sort-wrap{flex-shrink:0;margin-left:auto;position:relative}
+.sort-btn{display:inline-flex;align-items:center;gap:8px;padding:8px 14px;border-radius:3px;border:1px solid var(--b);background:var(--white);color:var(--t2);font-family:'Inter',sans-serif;font-size:11px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;cursor:pointer;white-space:nowrap;line-height:1}
+.sort-btn .chev{font-size:9px;opacity:0.6;transition:transform .15s}
+.sort-btn.open .chev{transform:rotate(180deg)}
+.sort-btn .label-strong{color:var(--t)}
+.sort-menu{position:absolute;top:calc(100% + 6px);right:0;min-width:200px;background:var(--white);border:1px solid var(--b);border-radius:4px;box-shadow:0 12px 28px -12px rgba(0,0,0,0.22);overflow:hidden;z-index:50}
+.sort-item{padding:11px 16px;font-family:'Inter',sans-serif;font-size:12.5px;font-weight:500;color:var(--t);cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:12px;border-bottom:1px solid var(--b2)}
+.sort-item:last-child{border-bottom:none}
+.sort-item:hover{background:var(--bg)}
+.sort-item .tick{font-size:12px;color:var(--orange);visibility:hidden}
+.sort-item.selected{color:var(--orange);font-weight:700}
+.sort-item.selected .tick{visibility:visible}
 .ftab{padding:8px 14px;border-radius:3px;border:1px solid var(--ftab-c,#888);font-family:'Inter',sans-serif;font-size:11px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--ftab-c,#888);cursor:pointer;white-space:nowrap;background:#fff;transition:all .15s;line-height:1}
 .ftab.on{color:#fff;background:var(--ftab-c,#888);border-color:var(--ftab-c,#888)}
 .ng{margin-bottom:14px}
@@ -339,7 +352,20 @@ html.login-active{background:var(--orange)}
       <input class="search-input" id="liked-search" placeholder="Search liked topics..." oninput="rk()">
       <button class="search-clear" onclick="clearLikedSearch()">✕</button>
     </div>
-    <div class="filter-tabs" id="kf"></div>
+    <div class="filter-row">
+      <div class="filter-tabs" id="kf"></div>
+      <div class="sort-wrap" id="sort-wrap">
+        <button class="sort-btn" id="sort-btn" onclick="toggleSortMenu(event)">
+          <span>Sort: <span class="label-strong" id="sort-current">Newest first</span></span>
+          <span class="chev">▼</span>
+        </button>
+        <div class="sort-menu" id="sort-menu" style="display:none">
+          <div class="sort-item" data-sort="newest" onclick="setSort('newest')">Newest first<span class="tick">✓</span></div>
+          <div class="sort-item" data-sort="oldest" onclick="setSort('oldest')">Oldest first<span class="tick">✓</span></div>
+          <div class="sort-item" data-sort="category" onclick="setSort('category')">By category<span class="tick">✓</span></div>
+        </div>
+      </div>
+    </div>
     <div class="sa" id="ks"></div>
   </div>
   <div id="vn">
@@ -799,7 +825,7 @@ function gh(){ try{return JSON.parse(localStorage.getItem(SK)||'[]')}catch(e){re
 function sh(h){ try{localStorage.setItem(SK,JSON.stringify(h))}catch(e){} }
 
 // ── State ──
-var ac=CATS[0], oc=null, cv='today', kf_val='all', ol=null, ok=null;
+var ac=CATS[0], oc=null, cv='today', kf_val='all', ol=null, ok=null, likedSort='newest';
 
 // ── Week utils ──
 function getWeekNumber(){
@@ -1110,9 +1136,28 @@ function rk(){
   var l=getLikes(); var q=(document.getElementById('liked-search')||{}).value||'';
   var filtered=kf_val==='all'?l:l.filter(function(x){return x.catId===kf_val;});
   if(q)filtered=filtered.filter(function(x){return(x.title||'').toLowerCase().includes(q.toLowerCase())||(x.headline||'').toLowerCase().includes(q.toLowerCase());});
+  // Apply sort. getLikes() is newest-first (unshift on add).
+  filtered=filtered.slice();
+  if(likedSort==='oldest'){
+    filtered.reverse();
+  }else if(likedSort==='category'){
+    var order={}; CATS.forEach(function(c,i){order[c.id]=i;});
+    filtered.sort(function(a,b){
+      var oa=order[a.catId]==null?99:order[a.catId];
+      var ob=order[b.catId]==null?99:order[b.catId];
+      return oa-ob; // stable: preserves newest-first within a category
+    });
+  }
   document.getElementById('kce').textContent=filtered.length+' liked topic'+(filtered.length!==1?'s':'');
   var cats=[{id:'all',label:'All',color:'#FF6600'}].concat(CATS.map(function(c){return{id:c.id,label:c.label,color:c.color};}));
   document.getElementById('kf').innerHTML=cats.map(function(c){var on=kf_val===c.id;return'<div class="ftab'+(on?' on':'')+'" style="--ftab-c:'+c.color+'" onclick="skf(\''+c.id+'\')">'+c.label+'</div>';}).join('');
+  // Sync sort button + menu
+  var sortLabels={newest:'Newest first',oldest:'Oldest first',category:'By category'};
+  var sc=document.getElementById('sort-current'); if(sc)sc.textContent=sortLabels[likedSort]||'Newest first';
+  var sm=document.getElementById('sort-menu');
+  if(sm){Array.prototype.forEach.call(sm.querySelectorAll('.sort-item'),function(it){
+    it.classList.toggle('selected',it.getAttribute('data-sort')===likedSort);
+  });}
   if(!filtered.length){document.getElementById('ks').innerHTML='<div class="empty"><span class="empty-icon">\u2661</span><div class="empty-title">No liked topics yet</div><div class="empty-sub">Tap \u2661 on any topic to save it here.</div></div>';return;}
   document.getElementById('ks').innerHTML=filtered.map(function(x,i){
     var catDef=CATS.find(function(c){return c.id===x.catId;})||{color:'#FF6600'};
@@ -1126,6 +1171,34 @@ function rk(){
       '<div class="tb">'+bh(x,x.catId,cColor,cDark)+'</div></div>';
   }).join('');
 }
+function toggleSortMenu(e){
+  if(e)e.stopPropagation();
+  var menu=document.getElementById('sort-menu');
+  var btn=document.getElementById('sort-btn');
+  if(!menu)return;
+  var showing=menu.style.display!=='none';
+  menu.style.display=showing?'none':'block';
+  if(btn)btn.classList.toggle('open',!showing);
+}
+function setSort(mode){
+  likedSort=mode;
+  var menu=document.getElementById('sort-menu');
+  var btn=document.getElementById('sort-btn');
+  if(menu)menu.style.display='none';
+  if(btn)btn.classList.remove('open');
+  ok=null;
+  rk();
+}
+document.addEventListener('click',function(e){
+  var wrap=document.getElementById('sort-wrap');
+  var menu=document.getElementById('sort-menu');
+  if(!wrap||!menu||menu.style.display==='none')return;
+  if(!wrap.contains(e.target)){
+    menu.style.display='none';
+    var btn=document.getElementById('sort-btn');
+    if(btn)btn.classList.remove('open');
+  }
+});
 function tklike(i){ ok=ok===i?null:i; rk(); }
 function skf(id){ kf_val=id; rk(); }
 function clearLikedSearch(){ document.getElementById('liked-search').value=''; rk(); }
