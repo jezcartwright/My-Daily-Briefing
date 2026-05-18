@@ -334,6 +334,44 @@ def topics_to_js(topics: list) -> str:
     return '[\n' + ',\n'.join(lines) + '\n]'
 
 
+def _find_matching_bracket(s: str, open_pos: int) -> int:
+    """Return index of the ] that closes the [ at open_pos.
+
+    CRITICAL: ignores brackets that appear inside JS string literals.
+    The previous implementation counted every [ and ] including those
+    inside topic text (citations like [1], names, etc.), which made it
+    splice new content at the wrong boundary and silently corrupt the
+    file while still printing success. This walks the string tracking
+    quote state so brackets inside strings are never counted.
+    """
+    depth = 0
+    in_string = False
+    quote = ''
+    escape = False
+    for i in range(open_pos, len(s)):
+        ch = s[i]
+        if escape:
+            escape = False
+            continue
+        if in_string:
+            if ch == '\\':
+                escape = True
+            elif ch == quote:
+                in_string = False
+            continue
+        if ch in ('"', "'"):
+            in_string = True
+            quote = ch
+            continue
+        if ch == '[':
+            depth += 1
+        elif ch == ']':
+            depth -= 1
+            if depth == 0:
+                return i
+    return -1
+
+
 def update_html(html: str, all_content: dict) -> str:
     """Prepend new content set to each category — keeps last 4 weeks of content."""
     MAX_SETS = 4  # Keep up to 4 weeks of content per category
@@ -345,27 +383,43 @@ def update_html(html: str, all_content: dict) -> str:
         marker = f'D.{cat_id}=['
         start = html.index(marker)
         
-        # Find the matching closing bracket of the outer array
-        pos = start + len(marker) - 1
-        depth = 0
-        for i in range(pos, len(html)):
-            if html[i] == '[':
-                depth += 1
-            elif html[i] == ']':
-                depth -= 1
-                if depth == 0:
-                    end = i + 1
-                    break
+        # Find the matching closing bracket of the outer array.
+        # String-aware: brackets inside topic text are ignored.
+        outer_open = start + len(marker) - 1
+        end_idx = _find_matching_bracket(html, outer_open)
+        if end_idx == -1:
+            raise ValueError(
+                f"Could not find matching ] for D.{cat_id} — refusing to "
+                f"splice (would corrupt the file). Aborting so existing "
+                f"content is preserved."
+            )
+        end = end_idx + 1
         
         # Extract existing sets from current block
         existing_block = html[start+len(marker):end-1].strip()
         
-        # Count existing sets by finding top-level arrays
-        # Each set is a [...] at depth 1
+        # Count existing sets by finding top-level arrays.
+        # Also string-aware for the same reason as above.
         existing_sets = []
         d = 0
         set_start = None
+        in_string = False
+        quote = ''
+        escape = False
         for i, ch in enumerate(existing_block):
+            if escape:
+                escape = False
+                continue
+            if in_string:
+                if ch == '\\':
+                    escape = True
+                elif ch == quote:
+                    in_string = False
+                continue
+            if ch in ('"', "'"):
+                in_string = True
+                quote = ch
+                continue
             if ch == '[':
                 d += 1
                 if d == 1:
@@ -376,9 +430,21 @@ def update_html(html: str, all_content: dict) -> str:
                     existing_sets.append(existing_block[set_start:i+1])
                     set_start = None
         
-        # Prepend new set, keep up to MAX_SETS
+        # Sanity check: the new content must actually appear in the new
+        # block, otherwise we have spliced wrong. Fail loudly rather than
+        # commit a file that looks updated but isn't.
         all_sets = [js_content] + existing_sets[:MAX_SETS-1]
         new_block = f'D.{cat_id}=[\n' + ',\n'.join(all_sets) + '\n]'
+
+        # Verify a distinctive piece of the new content is present.
+        first_title = topics[0].get('title', '') if topics else ''
+        if first_title and first_title.replace('"', '\\"') not in new_block:
+            raise ValueError(
+                f"Post-splice check failed for D.{cat_id}: new topic "
+                f"'{first_title}' not found in rebuilt block. Aborting "
+                f"to avoid committing corrupted content."
+            )
+
         html = html[:start] + new_block + html[end:]
         print(f"  ✓ Updated D.{cat_id} in HTML ({len(all_sets)} sets, newest first)")
     
