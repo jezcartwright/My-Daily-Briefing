@@ -44,9 +44,15 @@ Each topic must have:
 - insight: A real attributed quote relevant to the topic
 - attribution: "Full name, role/context"
 - deeper: Array of 3 items [{text: "...", url: "real URL or null"}]
-  - Item 1: A reflective question or personal challenge
-  - Item 2: A specific book, article or resource with real URL if available  
+  - Item 1: A reflective question or personal challenge (url MUST be null)
+  - Item 2: A specific book, article or resource with real URL if available
   - Item 3: A specific book, article or resource with real URL if available
+  - For Items 2 and 3: if it is a BOOK, set url to null UNLESS you are
+    certain of the real publisher/source page. Do NOT invent or guess a
+    URL — a fabricated link is worse than none. The system will add a safe
+    bookshop search link automatically for books left without a URL.
+  - When an item is a book, phrase its text as: Title - Author(s)
+    (so the title and author can be reliably detected).
 
 Quality standards:
 - WHY IT MATTERS must cite specific studies, data points or named research
@@ -299,6 +305,50 @@ def generate_category_content(client: anthropic.Anthropic, cat: dict, today: str
     return topics
 
 
+def _looks_like_book(text: str) -> bool:
+    """Heuristic: does this deeper-item text describe a book?
+
+    We keep this deliberately conservative — false positives (treating a
+    non-book as a book) only cost a harmless extra search link; we avoid
+    matching reflective questions (which end in '?') or obvious article/
+    podcast/episode references.
+    """
+    if not text:
+        return False
+    t = text.strip()
+    low = t.lower()
+    # Never treat the reflective question / prompt as a book.
+    if t.endswith('?'):
+        return False
+    # Strong negative signals — these are articles, papers, podcasts.
+    negative = ('hbr.org', 'http://', 'https://', 'ideacast', 'podcast',
+                'episode', 'working paper', 'journal of', 'review (',
+                'nber', 'arxiv', '.com', '.org')
+    if any(n in low for n in negative):
+        return False
+    # Positive signals for a book reference.
+    positive = (' - ', ' by ', '(press)', 'publishing', 'wiley', 'penguin',
+                'harpercollins', 'random house', 'press)', 'hbr press',
+                'harvard business review press')
+    return any(p in low for p in positive)
+
+
+def _book_search_url(text: str) -> str:
+    """Build a safe bookshop SEARCH url from a book-like deeper item.
+
+    Uses a search query (not a guessed product page) so it can never
+    404 in an embarrassing way — it always lands on results for the
+    title/author. Bookshop.org is used as a reputable, non-Amazon
+    default appropriate for a professional briefing.
+    """
+    import urllib.parse
+    # Strip a trailing parenthetical like "(Wiley, 2026)" and tidy dashes
+    # so the search query is just title + author.
+    q = re.sub(r'\([^)]*\)\s*$', '', text).strip()
+    q = q.replace(' - ', ' ').strip(' .')
+    return 'https://bookshop.org/beta-search?keywords=' + urllib.parse.quote(q)
+
+
 def topics_to_js(topics: list) -> str:
     """Convert topic list to JavaScript object array string."""
     lines = []
@@ -311,11 +361,21 @@ def topics_to_js(topics: list) -> str:
         
         ref_url = t.get('ref', {}).get('url')
         ref_text = t.get('ref', {}).get('text', '')
-        
+
         deeper_items = []
         for d in t.get('deeper', []):
             d_text = d.get('text', '') if isinstance(d, dict) else str(d)
             d_url = d.get('url') if isinstance(d, dict) else None
+
+            # Safety net (Option 1): if a deeper item looks like a BOOK and
+            # has no URL, attach a deterministic bookshop SEARCH url. A search
+            # URL can't 404 embarrassingly the way a guessed publisher link
+            # can — worst case it shows results for the right title. We only
+            # do this for book-like items, never for the reflective question
+            # (item 1), and never overwrite a real URL the model supplied.
+            if not d_url and _looks_like_book(d_text):
+                d_url = _book_search_url(d_text)
+
             deeper_items.append(
                 '{text:' + esc(d_text) + ',url:' + (esc(d_url) if d_url else 'null') + '}'
             )
